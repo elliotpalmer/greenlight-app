@@ -30,7 +30,7 @@ const SliderInput: React.FC<SliderInputProps> = ({ label, value, min, max, step,
           {label}
         </label>
         <span className="text-sm font-black text-white tabular-nums">
-          {value}<span className="text-[10px] opacity-60 ml-1">{unit}</span>
+          {Math.abs(value)}<span className="text-[10px] opacity-60 ml-1">{unit}</span>
         </span>
       </div>
       

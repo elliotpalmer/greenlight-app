@@ -597,18 +597,11 @@ Keep responses under 5 words.`,
               </div>
             )}
 
-            <section className="bg-emerald-950/40 p-6 rounded-3xl border border-emerald-800/30 space-y-2">
-              <SliderInput label="Distance" unit={`ft`} min={3} max={60} step={1} value={stats.distance} onChange={(v) => { setStats({...stats, distance: v}); triggerHaptic(); }} icon="fa-shoe-prints" />
-              <SliderInput label="Side Slope" unit="%" min={-5} max={5} step={0.5} value={stats.slopeSide} onChange={(v) => { setStats({...stats, slopeSide: v}); triggerHaptic(); }} icon="fa-arrows-left-right" />
-              <SliderInput label="Vert Slope" unit="%" min={-5} max={5} step={0.5} value={stats.slopeVertical} onChange={(v) => { setStats({...stats, slopeVertical: v}); triggerHaptic(); }} icon="fa-arrows-up-down" />
-              <SliderInput label="Green Speed" unit=" stp" min={7} max={14} step={0.5} value={stats.stimp} onChange={(v) => { setStats({...stats, stimp: v}); triggerHaptic(); }} icon="fa-bolt" />
-            </section>
-
             <section className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-white/5 p-4 rounded-2xl border border-white/10 flex flex-col items-center">
                    <span className="text-[10px] text-emerald-400 uppercase font-black tracking-widest">Aim Point</span>
-                   <span className="text-lg font-black text-white italic text-center h-10 flex items-center uppercase">{results.aimDescription}</span>
+                   <span className="text-sm font-black text-white italic text-center leading-tight flex items-center justify-center px-1 uppercase" style={{ minHeight: '2.5rem' }}>{results.aimDescription}</span>
                    <span className="text-[10px] text-white/30 uppercase font-bold mt-1">{results.breakInches}" Break</span>
                 </div>
                 <div className="bg-white/5 p-4 rounded-2xl border border-white/10 flex flex-col items-center">
@@ -618,6 +611,13 @@ Keep responses under 5 words.`,
                 </div>
               </div>
               <button onClick={saveToHistory} className="w-full py-3 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-xs font-black text-emerald-400 uppercase tracking-widest active:bg-emerald-500/30 transition-all">Store Result</button>
+            </section>
+
+            <section className="bg-emerald-950/40 p-6 rounded-3xl border border-emerald-800/30 space-y-2">
+              <SliderInput label="Distance" unit={`ft`} min={3} max={60} step={1} value={stats.distance} onChange={(v) => { setStats({...stats, distance: v}); triggerHaptic(); }} icon="fa-shoe-prints" />
+              <SliderInput label="Side Slope" unit={stats.slopeSide === 0 ? "Flat" : stats.slopeSide > 0 ? "% Right" : "% Left"} min={-5} max={5} step={0.5} value={stats.slopeSide} onChange={(v) => { setStats({...stats, slopeSide: v}); triggerHaptic(); }} icon="fa-arrows-left-right" />
+              <SliderInput label="Vert Slope" unit={stats.slopeVertical === 0 ? "Flat" : stats.slopeVertical > 0 ? "% Up" : "% Down"} min={-5} max={5} step={0.5} value={stats.slopeVertical} onChange={(v) => { setStats({...stats, slopeVertical: v}); triggerHaptic(); }} icon="fa-arrows-up-down" />
+              <SliderInput label="Green Speed" unit=" stp" min={7} max={14} step={0.5} value={stats.stimp} onChange={(v) => { setStats({...stats, stimp: v}); triggerHaptic(); }} icon="fa-bolt" />
             </section>
 
             <section className="bg-emerald-900/10 rounded-3xl p-3 border border-emerald-800/20 relative">
