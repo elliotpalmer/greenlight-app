@@ -85,6 +85,9 @@ const App: React.FC = () => {
   const audioContextsRef = useRef<{ input: AudioContext; output: AudioContext } | null>(null);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartTimeRef = useRef<number>(0);
+  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const results = useMemo(() => calculateBreak(stats, settings), [stats, settings]);
 
@@ -196,6 +199,24 @@ const App: React.FC = () => {
     if (!settings.voiceEnabled) return;
     triggerHaptic('medium');
     if (isVoiceActive) {
+      // Clean up audio resources
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+        silenceTimeoutRef.current = null;
+      }
+      if (audioWorkletNodeRef.current) {
+        audioWorkletNodeRef.current.disconnect();
+        audioWorkletNodeRef.current = null;
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+      }
+      if (audioContextsRef.current) {
+        audioContextsRef.current.input.close();
+        audioContextsRef.current.output.close();
+        audioContextsRef.current = null;
+      }
       if (voiceSessionRef.current) {
         voiceSessionRef.current.close();
         voiceSessionRef.current = null;
@@ -207,33 +228,50 @@ const App: React.FC = () => {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
       const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       audioContextsRef.current = { input: inputAudioContext, output: outputAudioContext };
+
+      // Load AudioWorklet processor
+      await inputAudioContext.audioWorklet.addModule('/audio-processor.js');
 
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
-          onopen: () => {
+          onopen: async () => {
             const source = inputAudioContext.createMediaStreamSource(stream);
-            const scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
-            scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-              const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-              const int16 = new Int16Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) {
-                int16[i] = inputData[i] * 32768;
+            const workletNode = new AudioWorkletNode(inputAudioContext, 'audio-processor');
+            audioWorkletNodeRef.current = workletNode;
+
+            workletNode.port.onmessage = (event) => {
+              const { type, data, isSpeaking } = event.data;
+              
+              if (type === 'audio-data') {
+                const pcmBlob = {
+                  data: encode(new Uint8Array(data.buffer)),
+                  mimeType: 'audio/pcm;rate=16000',
+                };
+                sessionPromise.then((session) => {
+                  session.sendRealtimeInput({ media: pcmBlob });
+                });
+              } else if (type === 'speech-start') {
+                // Clear any pending silence timeout
+                if (silenceTimeoutRef.current) {
+                  clearTimeout(silenceTimeoutRef.current);
+                  silenceTimeoutRef.current = null;
+                }
+              } else if (type === 'speech-end') {
+                // Auto-stop after 2 seconds of silence
+                silenceTimeoutRef.current = setTimeout(() => {
+                  toggleVoiceAssistant();
+                }, 2000);
               }
-              const pcmBlob = {
-                data: encode(new Uint8Array(int16.buffer)),
-                mimeType: 'audio/pcm;rate=16000',
-              };
-              sessionPromise.then((session) => {
-                session.sendRealtimeInput({ media: pcmBlob });
-              });
             };
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(inputAudioContext.destination);
+
+            source.connect(workletNode);
+            workletNode.connect(inputAudioContext.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
             if (message.serverContent?.inputTranscription) {
@@ -246,17 +284,32 @@ const App: React.FC = () => {
               for (const fc of message.toolCall.functionCalls) {
                 if (fc.name === 'updatePuttingStats') {
                   const args = fc.args as any;
-                  setStats(prev => ({
-                    ...prev,
-                    distance: args.distance ?? prev.distance,
-                    slopeSide: args.slopeSide ?? prev.slopeSide,
-                    slopeVertical: args.slopeVertical ?? prev.slopeVertical,
-                    stimp: args.stimp ?? prev.stimp,
-                  }));
+                  const newStats = {
+                    distance: args.distance ?? stats.distance,
+                    slopeSide: args.slopeSide ?? stats.slopeSide,
+                    slopeVertical: args.slopeVertical ?? stats.slopeVertical,
+                    stimp: args.stimp ?? stats.stimp,
+                  };
+                  setStats(newStats);
                   triggerHaptic('medium');
+                  
+                  // Calculate aim point with new stats
+                  const newResults = calculateBreak(newStats, settings);
+                  const aimDirection = newResults.breakInches > 0 ? 'right' : newResults.breakInches < 0 ? 'left' : 'straight';
+                  const aimDistance = Math.abs(newResults.breakInches);
+                  
                   sessionPromise.then((session) => {
                     session.sendToolResponse({
-                      functionResponses: { id: fc.id, name: fc.name, response: { result: "ok" } }
+                      functionResponses: { 
+                        id: fc.id, 
+                        name: fc.name, 
+                        response: { 
+                          result: "ok",
+                          aimPoint: `Aim ${aimDistance.toFixed(1)} inches ${aimDirection}`,
+                          distance: newStats.distance,
+                          slope: newStats.slopeSide
+                        } 
+                      }
                     });
                   });
                 }
@@ -300,17 +353,24 @@ CURRENT LIVE STATE:
 - Stimp: ${stats.stimp}
 
 COMMAND PARSING RULES:
-1. ABSOLUTE SETTINGS:
-   - "Set distance to 15 feet" or "Distance is 20" -> updatePuttingStats(distance: 15/20)
-   - "Side slope is 2 percent" -> updatePuttingStats(slopeSide: 2)
-   - "Stimp 11" -> updatePuttingStats(stimp: 11)
+1. DISTANCE COMMANDS:
+   - "3 paces" or "3 steps" -> Convert to feet: 3 * ${settings.stepLength} = ${3 * settings.stepLength}ft
+   - "15 feet" or "distance 15" -> updatePuttingStats(distance: 15)
+   - "Add 5 feet" -> calculate (${stats.distance} + 5)
 
-2. RELATIVE ADJUSTMENTS:
-   - "Increase distance by 5 feet" -> calculate (${stats.distance} + 5) and call updatePuttingStats.
-   - "Add 1 percent to side slope" -> calculate (${stats.slopeSide} + 1) and call updatePuttingStats.
+2. SLOPE COMMANDS:
+   - "2 percent slope" or "slope is 2" -> updatePuttingStats(slopeSide: 2)
+   - "Uphill 1 percent" -> updatePuttingStats(slopeVertical: 1)
+   - "Downhill 2 percent" -> updatePuttingStats(slopeVertical: -2)
 
-Call 'updatePuttingStats' IMMEDIATELY for every change. 
-Keep verbal feedback extremely brief and professional.`,
+3. COMBINED COMMANDS:
+   - "3 paces 2 percent slope" -> Parse both distance and slope
+   - "5 feet uphill 1 percent" -> Parse distance and vertical slope
+
+Call 'updatePuttingStats' IMMEDIATELY for every change.
+After updating, ALWAYS read back the aim point from the tool response.
+Example: "Updated. Aim 4.2 inches right."
+Keep responses under 5 words when possible.`,
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
           tools: [{
             functionDeclarations: [{

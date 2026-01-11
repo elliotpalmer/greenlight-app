@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+body {
+    background-color: #022c22;
+    color: white;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    touch-action: manipulation;
+    overflow-x: hidden;
+}
+
+input[type="range"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    background: transparent;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 20px;
+    width: 20px;
+    border-radius: 50%;
+    background: #ffffff;
+    cursor: pointer;
+    margin-top: -6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 6px;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+}
+
+@keyframes glow {
+  0%, 100% { 
+    filter: drop-shadow(0 0 2px #fbbf24); 
+    opacity: 0.8; 
+    transform: scale(1);
+  }
+  50% { 
+    filter: drop-shadow(0 0 10px #fbbf24); 
+    opacity: 1; 
+    transform: scale(1.08);
+  }
+}
+
+.animate-glow {
+  animation: glow 2s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}

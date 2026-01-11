@@ -3,70 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>GreenLight Putting</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="theme-color" content="#000000">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Greenlight">
+    <link rel="apple-touch-icon" href="/pwa-192x192.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        body {
-            background-color: #022c22;
-            color: white;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            touch-action: manipulation;
-            overflow-x: hidden;
-        }
-        input[type="range"] {
-            -webkit-appearance: none;
-            width: 100%;
-            background: transparent;
-        }
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            height: 20px;
-            width: 20px;
-            border-radius: 50%;
-            background: #ffffff;
-            cursor: pointer;
-            margin-top: -6px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }
-        input[type="range"]::-webkit-slider-runnable-track {
-            width: 100%;
-            height: 6px;
-            cursor: pointer;
-            background: rgba(255, 255, 255, 0.15);
-            border-radius: 4px;
-        }
-
-        @keyframes glow {
-          0%, 100% { 
-            filter: drop-shadow(0 0 2px #fbbf24); 
-            opacity: 0.8; 
-            transform: scale(1);
-          }
-          50% { 
-            filter: drop-shadow(0 0 10px #fbbf24); 
-            opacity: 1; 
-            transform: scale(1.08);
-          }
-        }
-        .animate-glow {
-          animation: glow 2s ease-in-out infinite;
-          transform-box: fill-box;
-          transform-origin: center;
-        }
-    </style>
-<script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.35.0"
-  }
-}
-</script>
+    <title>GreenLight Putting</title>
 </head>
 <body class="bg-emerald-950">
     <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
 </body>
 </html>
