@@ -1,0 +1,8 @@
+{
+  "name": "GreenLight Putting",
+  "description": "A compact tour-grade putting assistant for professional-level green reading and aim point calculation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
