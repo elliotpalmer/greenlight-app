@@ -88,6 +88,8 @@ const App: React.FC = () => {
   const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const isTogglingRef = useRef<boolean>(false);
 
   const results = useMemo(() => calculateBreak(stats, settings), [stats, settings]);
 
@@ -197,32 +199,65 @@ const App: React.FC = () => {
 
   const toggleVoiceAssistant = async () => {
     if (!settings.voiceEnabled) return;
+    
+    // Prevent multiple rapid toggles
+    if (isTogglingRef.current) {
+      console.log('[Voice] Toggle already in progress, ignoring');
+      return;
+    }
+    isTogglingRef.current = true;
+    console.log('[Voice] Toggle started');
+    
     triggerHaptic('medium');
     if (isVoiceActive) {
       // Clean up audio resources
+      console.log('[Voice] Manual close - cleaning up all resources');
       if (silenceTimeoutRef.current) {
         clearTimeout(silenceTimeoutRef.current);
         silenceTimeoutRef.current = null;
       }
+      
+      // Stop audio pipeline before closing contexts
+      if (mediaStreamSourceRef.current) {
+        console.log('[Voice] Disconnecting media stream source');
+        mediaStreamSourceRef.current.disconnect();
+        mediaStreamSourceRef.current = null;
+      }
       if (audioWorkletNodeRef.current) {
+        console.log('[Voice] Disconnecting and cleaning up AudioWorklet');
+        audioWorkletNodeRef.current.port.onmessage = null;
         audioWorkletNodeRef.current.disconnect();
         audioWorkletNodeRef.current = null;
       }
+      
+      // Stop media tracks
       if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current.getTracks().forEach(track => {
+          track.stop();
+          console.log('[Voice] Stopped media track:', track.kind);
+        });
         mediaStreamRef.current = null;
       }
-      if (audioContextsRef.current) {
-        audioContextsRef.current.input.close();
-        audioContextsRef.current.output.close();
-        audioContextsRef.current = null;
-      }
+      
+      // Close session
       if (voiceSessionRef.current) {
+        console.log('[Voice] Closing AI session');
         voiceSessionRef.current.close();
         voiceSessionRef.current = null;
       }
+      
+      // Close audio contexts last
+      if (audioContextsRef.current) {
+        console.log('[Voice] Closing audio contexts');
+        await audioContextsRef.current.input.close();
+        await audioContextsRef.current.output.close();
+        audioContextsRef.current = null;
+      }
+      
       setIsVoiceActive(false);
       setTranscript({ input: "", output: "" });
+      console.log('[Voice] Cleanup complete');
+      isTogglingRef.current = false;
       return;
     }
 
@@ -234,37 +269,50 @@ const App: React.FC = () => {
       audioContextsRef.current = { input: inputAudioContext, output: outputAudioContext };
 
       // Load AudioWorklet processor
+      console.log('[Voice] Loading AudioWorklet module...');
       await inputAudioContext.audioWorklet.addModule('/audio-processor.js');
+      console.log('[Voice] AudioWorklet module loaded successfully');
 
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
           onopen: async () => {
+            console.log('[Voice] Session opened, setting up audio pipeline...');
             const source = inputAudioContext.createMediaStreamSource(stream);
+            mediaStreamSourceRef.current = source;
             const workletNode = new AudioWorkletNode(inputAudioContext, 'audio-processor');
             audioWorkletNodeRef.current = workletNode;
+            console.log('[Voice] AudioWorkletNode created');
 
             workletNode.port.onmessage = (event) => {
               const { type, data, isSpeaking } = event.data;
               
               if (type === 'audio-data') {
+                // Only send if session is still active
+                if (!voiceSessionRef.current) return;
+                
                 const pcmBlob = {
                   data: encode(new Uint8Array(data.buffer)),
                   mimeType: 'audio/pcm;rate=16000',
                 };
                 sessionPromise.then((session) => {
-                  session.sendRealtimeInput({ media: pcmBlob });
+                  if (session && voiceSessionRef.current) {
+                    session.sendRealtimeInput({ media: pcmBlob });
+                  }
                 });
               } else if (type === 'speech-start') {
+                console.log('[Voice] Speech started - clearing silence timeout');
                 // Clear any pending silence timeout
                 if (silenceTimeoutRef.current) {
                   clearTimeout(silenceTimeoutRef.current);
                   silenceTimeoutRef.current = null;
                 }
               } else if (type === 'speech-end') {
+                console.log('[Voice] Speech ended - starting 2s auto-stop timer');
                 // Auto-stop after 2 seconds of silence
                 silenceTimeoutRef.current = setTimeout(() => {
+                  console.log('[Voice] Auto-stopping due to silence');
                   toggleVoiceAssistant();
                 }, 2000);
               }
@@ -272,17 +320,24 @@ const App: React.FC = () => {
 
             source.connect(workletNode);
             workletNode.connect(inputAudioContext.destination);
+            console.log('[Voice] Audio pipeline connected');
           },
           onmessage: async (message: LiveServerMessage) => {
             if (message.serverContent?.inputTranscription) {
-              setTranscript(prev => ({ ...prev, input: message.serverContent!.inputTranscription!.text }));
+              const text = message.serverContent.inputTranscription.text;
+              console.log('[Voice] Input transcription:', text);
+              // API sends cumulative text, so just replace
+              setTranscript(prev => ({ ...prev, input: text }));
             }
             if (message.serverContent?.outputTranscription) {
+              console.log('[Voice] Output transcription:', message.serverContent.outputTranscription.text);
               setTranscript(prev => ({ ...prev, output: message.serverContent!.outputTranscription!.text }));
             }
             if (message.toolCall) {
+              console.log('[Voice] Tool call received:', message.toolCall);
               for (const fc of message.toolCall.functionCalls) {
                 if (fc.name === 'updatePuttingStats') {
+                  console.log('[Voice] Updating stats with args:', fc.args);
                   const args = fc.args as any;
                   const newStats = {
                     distance: args.distance ?? stats.distance,
@@ -297,6 +352,7 @@ const App: React.FC = () => {
                   const newResults = calculateBreak(newStats, settings);
                   const aimDirection = newResults.breakInches > 0 ? 'right' : newResults.breakInches < 0 ? 'left' : 'straight';
                   const aimDistance = Math.abs(newResults.breakInches);
+                  console.log('[Voice] Calculated aim point:', aimDistance.toFixed(1), 'inches', aimDirection);
                   
                   sessionPromise.then((session) => {
                     session.sendToolResponse({
@@ -317,8 +373,10 @@ const App: React.FC = () => {
             }
             const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (base64Audio) {
+              console.log('[Voice] Received audio response, duration:', base64Audio.length, 'bytes');
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputAudioContext.currentTime);
               const audioBuffer = await decodeAudioData(decode(base64Audio), outputAudioContext, 24000, 1);
+              console.log('[Voice] Audio buffer decoded, duration:', audioBuffer.duration.toFixed(2), 's');
               const source = outputAudioContext.createBufferSource();
               source.buffer = audioBuffer;
               source.connect(outputAudioContext.destination);
@@ -334,10 +392,13 @@ const App: React.FC = () => {
             }
           },
           onerror: (e) => {
-            console.error('Voice Assistant Error:', e);
+            console.error('[Voice] Error:', e);
             setIsVoiceActive(false);
           },
-          onclose: () => setIsVoiceActive(false),
+          onclose: () => {
+            console.log('[Voice] Session closed');
+            setIsVoiceActive(false);
+          },
         },
         config: {
           responseModalities: [Modality.AUDIO],
@@ -356,21 +417,26 @@ COMMAND PARSING RULES:
 1. DISTANCE COMMANDS:
    - "3 paces" or "3 steps" -> Convert to feet: 3 * ${settings.stepLength} = ${3 * settings.stepLength}ft
    - "15 feet" or "distance 15" -> updatePuttingStats(distance: 15)
-   - "Add 5 feet" -> calculate (${stats.distance} + 5)
 
-2. SLOPE COMMANDS:
-   - "2 percent slope" or "slope is 2" -> updatePuttingStats(slopeSide: 2)
+2. SLOPE DIRECTION (CRITICAL):
+   - POSITIVE slope = ball breaks RIGHT TO LEFT (aim right of hole)
+   - NEGATIVE slope = ball breaks LEFT TO RIGHT (aim left of hole)
+   - "Breaking right" or "right to left" or "slope right" -> POSITIVE number
+   - "Breaking left" or "left to right" or "slope left" -> NEGATIVE number
+   - Example: "2 percent breaking right" -> updatePuttingStats(slopeSide: 2)
+   - Example: "3 percent breaking left" -> updatePuttingStats(slopeSide: -3)
+
+3. VERTICAL SLOPE:
    - "Uphill 1 percent" -> updatePuttingStats(slopeVertical: 1)
    - "Downhill 2 percent" -> updatePuttingStats(slopeVertical: -2)
 
-3. COMBINED COMMANDS:
-   - "3 paces 2 percent slope" -> Parse both distance and slope
-   - "5 feet uphill 1 percent" -> Parse distance and vertical slope
+4. COMBINED COMMANDS:
+   - "3 paces 2 percent breaking right" -> distance and positive slope
+   - "5 feet breaking left 3 percent" -> distance and negative slope
 
 Call 'updatePuttingStats' IMMEDIATELY for every change.
-After updating, ALWAYS read back the aim point from the tool response.
-Example: "Updated. Aim 4.2 inches right."
-Keep responses under 5 words when possible.`,
+After updating, read back the aim point briefly.
+Keep responses under 5 words.`,
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
           tools: [{
             functionDeclarations: [{
@@ -391,8 +457,11 @@ Keep responses under 5 words when possible.`,
       });
       voiceSessionRef.current = await sessionPromise;
       setIsVoiceActive(true);
+      console.log('[Voice] Voice assistant activated successfully');
+      isTogglingRef.current = false;
     } catch (err) {
-      console.error('Mic Access Error:', err);
+      console.error('[Voice] Mic Access Error:', err);
+      isTogglingRef.current = false;
     }
   };
 
@@ -448,12 +517,22 @@ Keep responses under 5 words when possible.`,
         </button>
       )}
 
-      {isVoiceActive && (transcript.input || transcript.output) && (
-        <div className="fixed top-24 left-4 right-4 z-50 p-4 bg-black/70 backdrop-blur-md rounded-2xl border border-white/10 animate-in fade-in slide-in-from-top-4 duration-300">
-           {transcript.input && <p className="text-[10px] text-emerald-400 font-bold uppercase mb-1">Live Feed:</p>}
-           <p className="text-sm text-white font-medium italic">{transcript.input || "Listening for command..."}</p>
-        </div>
-      )}
+      {/* Transcription Bubble - Debug */}
+      {(() => {
+        console.log('[Voice] Bubble render check - isVoiceActive:', isVoiceActive, 'transcript.input:', transcript.input);
+        return isVoiceActive && transcript.input && (
+          <div className="fixed bottom-48 right-6 z-50 max-w-[240px] animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="relative">
+              {/* Speech bubble tail */}
+              <div className="absolute -bottom-2 right-8 w-4 h-4 bg-emerald-600 rotate-45 border-r border-b border-emerald-500/30"></div>
+              {/* Speech bubble content */}
+              <div className="bg-emerald-600 rounded-2xl p-3 shadow-2xl border border-emerald-500/30 backdrop-blur-sm">
+                <p className="text-xs text-emerald-100 font-medium leading-relaxed">{transcript.input}</p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <header className="py-4 flex justify-between items-center border-b border-emerald-800/30 mb-6">
         <div className="flex items-center gap-3">
